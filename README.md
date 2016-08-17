@@ -14,6 +14,7 @@ API credentials, you may visit https://api.ovh.com. See
 The easiest way to install ovh docker-machine driver is to:
 
 ```bash
+go get github.com/yadutaf/docker-machine-driver-ovh
 go install github.com/yadutaf/docker-machine-driver-ovh
 ln -s $GOPATH/bin/docker-machine-driver-ovh /usr/local/bin/docker-machine-driver-ovh
 ```
@@ -32,10 +33,12 @@ generating them is easy:
 
 ## 2. Create a configuration file
 
+Create a file named ```ovh.conf```.
 This file will allow any application built with official OVH API drivers to
 use it without requiring new keys:
 
 ```ini
+; ovh.conf
 [default]
 endpoint=ovh-eu
 
@@ -71,16 +74,24 @@ Note: For the different image-types you have to use special --ovh-ssh-user (for 
 |``--ovh-flavor``                                           |Cloud Machine type|vps-ssd-1 |no|
 |``--ovh-image``                                            |Cloud Machine image|Ubuntu 16.04 |no|
 |``--ovh-ssh-user``                                         |Cloud Machine SSH User|ubuntu |no|
-|``--ovh-project``                                          |Cloud Project name|single one|only if multiple projects|
+|``--ovh-project``                                          |Cloud Project name/description or id|single one|only if multiple projects|
+|``--ovh-ssh-key``                                          |Cloud Machine SSH Key|none |no|
 
-Note: OVH credentials may be supplied through arguments, environment or configuration file, by order
-of decreasing priority. The configuration may be:
+Note:
 
-- global ``/etc/ovh.conf``
-- user specific ``~/.ovh.conf``
-- application specific ``./ovh.conf``
+1. OVH credentials
 
+   OVH credentials may be supplied through arguments, environment or configuration file, by order of decreasing priority. The configuration may be:
 
+   - global ``/etc/ovh.conf``
+   - user specific ``~/.ovh.conf``
+   - application specific ``./ovh.conf``
+
+2. SSH key
+
+   Docker-machine can generate a key for each new machine. It is a nice feature to start with but it will quickly load your OVH project with many keys (even though these keys are removed uppon machine deletion).
+
+   With the `--ovh-ssh-key` option you can define a key name (already present in your ovh project). This key must be accessible (in ~/.ssh or in the ssh agent) by the ssh binary present on the machine running docker-mamchine.
 
 ## Hacking
 
