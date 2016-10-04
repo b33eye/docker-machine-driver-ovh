@@ -30,6 +30,9 @@ type Driver struct {
 	FlavorName  string
 	RegionName  string
 
+	// Ovh specific parameters
+	BillingPeriod string
+
 	// Internal ids
 	ProjectID   string
 	FlavorID    string
@@ -99,6 +102,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage: "OVH Cloud ssh username to use. Default: machine",
 			Value: DefaultSSHUserName,
 		},
+		mcnflag.StringFlag{
+			Name:  "ovh-billing-period",
+			Usage: "OVH Cloud billing period (hourly or monthly). Default: hourly",
+			Value: DefaultBillingPeriod,
+		},
 	}
 }
 
@@ -132,6 +140,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.FlavorName = flags.String("ovh-flavor")
 	d.ImageID = flags.String("ovh-image")
 	d.KeyPairName = flags.String("ovh-ssh-key")
+	d.BillingPeriod = flags.String("ovh-billing-period")
 
 	// Swarm configuration, must be in each driver
 	d.SwarmMaster = flags.Bool("swarm-master")
@@ -149,6 +158,13 @@ func (d *Driver) PreCreateCheck() error {
 	if err != nil {
 		return err
 	}
+
+	// Validate billing period
+	log.Debug("Validating billing period")
+	if d.BillingPeriod != "monthly" && d.BillingPeriod != "hourly" {
+		return fmt.Errorf("Invalid billing period '%s'. Please select one of 'hourly', 'monthly'", d.BillingPeriod)
+	}
+	log.Debug("Selecting billing period", d.BillingPeriod)
 
 	// Validate project id
 	log.Debug("Validating project")
@@ -170,7 +186,18 @@ func (d *Driver) PreCreateCheck() error {
 		} else if len(projects) == 0 {
 			return fmt.Errorf("No Cloud project could be found. To create a new one, please visit %s", CustomerInterface)
 		} else {
-			return fmt.Errorf("Multiple Cloud project found, to select one, use '--ovh-project' option")
+			// Build a list of project names to help choose one
+			var projectNames []string
+			for _, projectID := range projects {
+				project, err := client.GetProject(projectID)
+				if err != nil {
+					projectNames = append(projectNames, projectID)
+				} else {
+					projectNames = append(projectNames, project.Name)
+				}
+			}
+
+			return fmt.Errorf("Multiple Cloud project found (%s), to select one, use '--ovh-project' option", strings.Join(projectNames[:], ", "))
 		}
 	}
 	log.Debug("Found project id ", d.ProjectID)
@@ -319,6 +346,7 @@ func (d *Driver) Create() error {
 
 	// Create instance
 	log.Debug("Creating OVH instance...")
+	monthlyBilling := d.BillingPeriod == "monthly"
 	instance, err := client.CreateInstance(
 		d.ProjectID,
 		d.MachineName,
@@ -326,7 +354,7 @@ func (d *Driver) Create() error {
 		d.FlavorID,
 		d.ImageID,
 		d.RegionName,
-		false,
+		monthlyBilling,
 	)
 	if err != nil {
 		return err
@@ -421,10 +449,12 @@ func (d *Driver) Remove() error {
 		return err
 	}
 
-	// Deletes instance
-	err = client.DeleteInstance(d.ProjectID, d.InstanceID)
-	if err != nil {
-		return err
+	// Deletes instance, if we created it
+	if d.InstanceID != "" {
+		err = client.DeleteInstance(d.ProjectID, d.InstanceID)
+		if err != nil {
+			return err
+		}
 	}
 
 	// If key name  does not starts with the machine ID, this is a pre-existing key, keep it
@@ -433,11 +463,13 @@ func (d *Driver) Remove() error {
 		return nil
 	}
 
-	// Deletes ssh key
-	log.Debugf("deleting key pair...", map[string]interface{}{"KeyPairID": d.KeyPairID})
-	err = client.DeleteSshkey(d.ProjectID, d.KeyPairID)
-	if err != nil {
-		return err
+	// Deletes ssh key, if we created it
+	if d.KeyPairID != "" {
+		log.Debugf("deleting key pair...", map[string]interface{}{"KeyPairID": d.KeyPairID})
+		err = client.DeleteSshkey(d.ProjectID, d.KeyPairID)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
