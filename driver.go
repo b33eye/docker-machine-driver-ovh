@@ -26,12 +26,14 @@ type Driver struct {
 	*drivers.BaseDriver
 
 	// Command line parameters
-	ProjectName string
-	FlavorName  string
-	RegionName  string
+	ProjectName        string
+	FlavorName         string
+	RegionName         string
+	PrivateNetworkName string
 
 	// Ovh specific parameters
 	BillingPeriod string
+	Endpoint      string
 
 	// Internal ids
 	ProjectID   string
@@ -40,6 +42,7 @@ type Driver struct {
 	InstanceID  string
 	KeyPairName string
 	KeyPairID   string
+	NetworkIDs  []string
 
 	// Overloaded credentials
 	ApplicationKey    string
@@ -73,6 +76,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Value:  "",
 		},
 		mcnflag.StringFlag{
+			Name:  "ovh-endpoint",
+			Usage: "OVH Cloud API endpoint. Default: ovh-eu",
+			Value: "",
+		},
+		mcnflag.StringFlag{
 			Name:  "ovh-project",
 			Usage: "OVH Cloud project name or id",
 			Value: "",
@@ -91,6 +99,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Name:  "ovh-image",
 			Usage: "OVH Cloud Image name or id. Default: Ubuntu 16.04",
 			Value: DefaultImageName,
+		},
+		mcnflag.StringFlag{
+			Name:  "ovh-private-network",
+			Usage: "OVH Cloud (private) network name or vlan number. Default: public network",
+			Value: "",
 		},
 		mcnflag.StringFlag{
 			Name:  "ovh-ssh-key",
@@ -118,7 +131,7 @@ func (d *Driver) DriverName() string {
 // getClient returns an OVH API client
 func (d *Driver) getClient() (api *API, err error) {
 	if d.client == nil {
-		client, err := NewAPI("ovh-eu", d.ApplicationKey, d.ApplicationSecret, d.ConsumerKey)
+		client, err := NewAPI(d.Endpoint, d.ApplicationKey, d.ApplicationSecret, d.ConsumerKey)
 		if err != nil {
 			return nil, fmt.Errorf("Could not create a connection to OVH API. You may want to visit: https://github.com/yadutaf/docker-machine-driver-ovh#example-usage. The original error was: %s", err)
 		}
@@ -135,10 +148,12 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.ConsumerKey = flags.String("ovh-consumer-key")
 
 	// Store configuration parameters as-is
+	d.Endpoint = flags.String("ovh-endpoint")
 	d.ProjectName = flags.String("ovh-project")
 	d.RegionName = flags.String("ovh-region")
 	d.FlavorName = flags.String("ovh-flavor")
 	d.ImageID = flags.String("ovh-image")
+	d.PrivateNetworkName = flags.String("ovh-private-network")
 	d.KeyPairName = flags.String("ovh-ssh-key")
 	d.BillingPeriod = flags.String("ovh-billing-period")
 
@@ -237,6 +252,27 @@ func (d *Driver) PreCreateCheck() error {
 	d.ImageID = image.ID
 	log.Debug("Found image id ", d.ImageID)
 
+	// Validate private network
+	log.Debug("Validating private network")
+	if d.PrivateNetworkName != "" {
+		privateNetwork, err := client.GetPrivateNetworkByName(d.ProjectID, d.PrivateNetworkName)
+		if err != nil {
+			return err
+		}
+		d.NetworkIDs = append(d.NetworkIDs, privateNetwork.ID)
+		log.Debug("Found private network id ", privateNetwork.ID)
+
+		publicNetworkID, err := client.GetPublicNetworkID(d.ProjectID)
+		if err != nil {
+			return err
+		}
+		d.NetworkIDs = append(d.NetworkIDs, publicNetworkID)
+		log.Debug("Found public network id ", publicNetworkID)
+
+	} else {
+		log.Debug("No private network found. Using public network")
+	}
+
 	// Use a common key or create a machine specific one
 	keyPath := filepath.Join(d.StorePath, "sshkeys", d.KeyPairName)
 	if len(d.KeyPairName) != 0 {
@@ -247,10 +283,15 @@ func (d *Driver) PreCreateCheck() error {
 		}
 	} else {
 		d.KeyPairName = fmt.Sprintf("%s-%s", d.MachineName, mcnutils.GenerateRandomID())
+		sanitizeKeyPairName(&d.KeyPairName)
 		d.SSHKeyPath = d.ResolveStorePath(d.KeyPairName)
 	}
 
 	return nil
+}
+//copied from openstack driver
+func sanitizeKeyPairName(s *string) {
+	*s = strings.Replace(*s, ".", "_", -1)
 }
 
 // ensureSSHKey makes sure an SSH key for the machine exists with requested name
@@ -355,6 +396,7 @@ func (d *Driver) Create() error {
 		d.FlavorID,
 		d.ImageID,
 		d.RegionName,
+		d.NetworkIDs,
 		monthlyBilling,
 	)
 	if err != nil {
